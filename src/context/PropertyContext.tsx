@@ -19,6 +19,7 @@ import {
 } from '../types';
 import { INITIAL_PROPERTY_DATA } from '../data/initialData';
 import { getFullClientMeta } from '../utils/deviceInfo';
+import { supabase, fetchFromSupabase, saveToSupabase } from '../lib/supabase';
 
 interface RawCollectionsData {
   buildings: Building[];
@@ -348,11 +349,51 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
     setIsMobileMenuOpen((prev) => !prev);
   };
 
+  // Initial load and real-time subscription from Supabase
+  useEffect(() => {
+    let isMounted = true;
+
+    // Initial fetch from Supabase
+    fetchFromSupabase().then((remoteData) => {
+      if (isMounted) {
+        if (remoteData && Array.isArray(remoteData.buildings) && remoteData.buildings.length > 0) {
+          setRawCollections(remoteData);
+        } else {
+          // Push initial dataset if table was newly created and empty
+          saveToSupabase(rawCollections);
+        }
+      }
+    });
+
+    // Real-time updates subscription
+    const channel = supabase
+      .channel('public:property_state')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'property_state' },
+        (payload) => {
+          if (payload.new && (payload.new as any).payload) {
+            const updatedState = (payload.new as any).payload;
+            if (Array.isArray(updatedState.buildings)) {
+              setRawCollections(updatedState);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
   // Sync data when rawCollections or activeTenantCode changes
   useEffect(() => {
     const computed = computeFilteredData(rawCollections, activeTenantCode);
     setData(computed);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(rawCollections));
+    saveToSupabase(rawCollections);
   }, [rawCollections, activeTenantCode]);
 
   const updateRaw = (updater: (prev: RawCollectionsData) => RawCollectionsData) => {
