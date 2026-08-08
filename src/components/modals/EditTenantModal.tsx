@@ -11,6 +11,9 @@ import {
   MapPin,
   Save,
   SlidersHorizontal,
+  Download,
+  Upload,
+  FileJson,
 } from 'lucide-react';
 
 interface EditTenantModalProps {
@@ -24,7 +27,7 @@ export const EditTenantModal: React.FC<EditTenantModalProps> = ({
   onClose,
   tenant,
 }) => {
-  const { updateTenantWorkspace } = useProperty();
+  const { updateTenantWorkspace, exportTenantBackup, importTenantBackup } = useProperty();
 
   const [propertyName, setPropertyName] = useState('');
   const [region, setRegion] = useState('');
@@ -49,6 +52,51 @@ export const EditTenantModal: React.FC<EditTenantModalProps> = ({
   }, [tenant, isOpen]);
 
   if (!isOpen || !tenant) return null;
+
+  const handleExportJson = () => {
+    try {
+      const backupObj = exportTenantBackup(tenant.propertyCode);
+      const jsonStr = JSON.stringify(backupObj, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `property_backup_${tenant.propertyCode.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setSuccessMsg(`JSON backup for property [${tenant.propertyCode}] downloaded successfully!`);
+    } catch (err: any) {
+      setErrorMsg('Failed to generate export backup JSON.');
+    }
+  };
+
+  const handleImportJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setErrorMsg('');
+    setSuccessMsg('');
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const content = evt.target?.result as string;
+        const parsed = JSON.parse(content);
+        const res = await importTenantBackup(tenant.propertyCode, parsed);
+        if (res.success) {
+          setSuccessMsg(res.message);
+        } else {
+          setErrorMsg(res.message);
+        }
+      } catch (err: any) {
+        setErrorMsg('Invalid JSON file format. Please upload a valid property database JSON backup.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -226,6 +274,47 @@ export const EditTenantModal: React.FC<EditTenantModalProps> = ({
                   <option value="MAINTENANCE">MAINTENANCE (Schema Upgrades)</option>
                 </select>
               </div>
+            </div>
+          </div>
+
+          {/* Export & Import JSON Backup Section */}
+          <div className="p-4 bg-amber-50/70 border border-amber-300 rounded-xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 font-bold text-amber-950 text-xs uppercase tracking-wider">
+                <FileJson className="w-4 h-4 text-amber-700 shrink-0" />
+                <span>Property Database JSON Backup & Restore</span>
+              </div>
+              <span className="text-[10px] font-mono text-amber-900 bg-amber-200/90 border border-amber-300 px-2 py-0.5 rounded-xs font-bold">
+                Entire [{tenant.propertyCode}] Scope
+              </span>
+            </div>
+
+            <p className="text-xs text-amber-950 leading-relaxed font-medium">
+              Export a complete JSON snapshot containing all buildings, floors, rooms, bed slots, maintenance records, food waste logs, and users for <strong>{tenant.propertyName}</strong>, or import an existing property JSON backup file to restore database state.
+            </p>
+
+            <div className="flex flex-wrap items-center gap-3 pt-1">
+              {/* Export Button */}
+              <button
+                type="button"
+                onClick={handleExportJson}
+                className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold font-mono text-xs uppercase tracking-wider rounded-xs flex items-center gap-2 shadow-2xs transition-colors"
+              >
+                <Download className="w-3.5 h-3.5 text-white" />
+                <span>Export Property Backup JSON</span>
+              </button>
+
+              {/* Import File Button */}
+              <label className="px-3.5 py-2 bg-[#1A1A1A] hover:bg-[#333330] text-amber-400 font-bold font-mono text-xs uppercase tracking-wider rounded-xs flex items-center gap-2 shadow-2xs cursor-pointer transition-colors border border-[#333330]">
+                <Upload className="w-3.5 h-3.5 text-amber-400" />
+                <span>Import Property Backup JSON</span>
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleImportJson}
+                  className="hidden"
+                />
+              </label>
             </div>
           </div>
 

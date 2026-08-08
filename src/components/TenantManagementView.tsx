@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useProperty } from '../context/PropertyContext';
 import { useAuth } from '../context/AuthContext';
 import { TenantWorkspace } from '../types';
+import { INITIAL_PROPERTY_DATA } from '../data/initialData';
 import { CreateTenantModal } from './modals/CreateTenantModal';
 import { EditTenantModal } from './modals/EditTenantModal';
 import { ConfirmDeleteModal } from './modals/ConfirmDeleteModal';
@@ -29,15 +30,23 @@ import {
   Copy,
   Check,
   Zap,
+  Download,
+  Upload,
+  FileJson,
 } from 'lucide-react';
 
 export const TenantManagementView: React.FC = () => {
   const {
     data,
+    rawCollections,
     activeTenantCode,
     setActiveTenantCode,
     updateTenantStatus,
     deleteTenantWorkspace,
+    exportFullBackup,
+    importFullBackup,
+    exportTenantBackup,
+    importTenantBackup,
   } = useProperty();
 
   const { currentUser } = useAuth();
@@ -45,28 +54,199 @@ export const TenantManagementView: React.FC = () => {
   const [supabaseSyncStatus, setSupabaseSyncStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
   const [supabaseMsg, setSupabaseMsg] = useState<string>('');
   const [copiedKey, setCopiedKey] = useState<boolean>(false);
+  const [copiedSql, setCopiedSql] = useState<boolean>(false);
 
   const testSupabaseConnection = async () => {
     setSupabaseSyncStatus('testing');
-    setSupabaseMsg('Connecting to Supabase...');
+    setSupabaseMsg('Testing connection and write permissions to Supabase...');
     try {
       const { data, error } = await supabase.from('property_state').select('id').limit(1);
       if (error) {
+        setSupabaseSyncStatus('error');
         if (error.code === '42P01' || error.message.includes('does not exist')) {
-          setSupabaseSyncStatus('success');
-          setSupabaseMsg('Connected successfully! Table "property_state" will be auto-created on first save or sync.');
+          setSupabaseMsg(`Table "property_state" missing. Please run the SQL script below in Supabase SQL Editor.`);
+        } else if (error.code === '42501' || error.message.includes('row-level security') || error.message.includes('permission denied')) {
+          setSupabaseMsg(`Row-Level Security (RLS) restriction detected: "${error.message}". Run the RLS bypass SQL script below.`);
         } else {
-          setSupabaseSyncStatus('success');
-          setSupabaseMsg(`Connected to Supabase endpoint! (${error.message})`);
+          setSupabaseMsg(`Supabase query error (${error.code || 'ERR'}): ${error.message}`);
         }
       } else {
-        setSupabaseSyncStatus('success');
-        setSupabaseMsg('Connected & synchronized with Supabase database!');
+        // Try write check
+        const targetData = (rawCollections && Array.isArray(rawCollections.buildings) && rawCollections.buildings.length > 0)
+          ? rawCollections
+          : INITIAL_PROPERTY_DATA;
+        const saveRes = await saveToSupabase(targetData);
+        if (saveRes.success) {
+          setSupabaseSyncStatus('success');
+          setSupabaseMsg('Connection verified & successfully wrote test payload to Supabase "property_state" table!');
+        } else {
+          setSupabaseSyncStatus('error');
+          const isFetchErr = saveRes.error?.includes('Failed to fetch') || saveRes.error?.includes('TypeError');
+          setSupabaseMsg(
+            isFetchErr
+              ? 'Network fetch failed: Supabase URL unreachable or offline. Local Storage is active.'
+              : `Read succeeded, but write failed: ${saveRes.error}. Please check table RLS policies.`
+          );
+        }
       }
     } catch (e: any) {
       setSupabaseSyncStatus('error');
-      setSupabaseMsg(`Connection error: ${e?.message || 'Failed to connect'}`);
+      const msg = e?.message || 'Failed to connect to Supabase';
+      setSupabaseMsg(msg.includes('Failed to fetch') ? 'Network fetch failed: Supabase URL unreachable or offline. Local Storage is active.' : `Connection error: ${msg}`);
     }
+  };
+
+  const handleForceSync = async () => {
+    setSupabaseSyncStatus('testing');
+    setSupabaseMsg('Force pushing current property state to Supabase...');
+    const targetData = (rawCollections && Array.isArray(rawCollections.buildings) && rawCollections.buildings.length > 0)
+      ? rawCollections
+      : INITIAL_PROPERTY_DATA;
+    const result = await saveToSupabase(targetData);
+    if (result.success) {
+      setSupabaseSyncStatus('success');
+      setSupabaseMsg('Force sync complete! All property state records are live on Supabase.');
+    } else {
+      setSupabaseSyncStatus('error');
+      const isFetchErr = result.error?.includes('Failed to fetch') || result.error?.includes('TypeError');
+      setSupabaseMsg(
+        isFetchErr
+          ? 'Network fetch failed: Supabase endpoint unreachable. Local Storage is safely preserving all data.'
+          : `Sync failed: ${result.error}. Run the SQL setup script below in Supabase SQL Editor.`
+      );
+    }
+  };
+
+  const handleExportFullSystemJson = () => {
+    try {
+      const backupObj = exportFullBackup();
+      const jsonStr = JSON.stringify(backupObj, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `full_system_database_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setSupabaseSyncStatus('success');
+      setSupabaseMsg('Full system database backup exported successfully as JSON!');
+    } catch (err: any) {
+      setSupabaseSyncStatus('error');
+      setSupabaseMsg('Failed to generate full system backup JSON.');
+    }
+  };
+
+  const handleImportFullSystemJson = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSupabaseSyncStatus('testing');
+    setSupabaseMsg('Reading and restoring JSON database backup...');
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const content = evt.target?.result as string;
+        const parsed = JSON.parse(content);
+        const res = await importFullBackup(parsed);
+        if (res.success) {
+          setSupabaseSyncStatus('success');
+          setSupabaseMsg(res.message);
+        } else {
+          setSupabaseSyncStatus('error');
+          setSupabaseMsg(res.message);
+        }
+      } catch (err: any) {
+        setSupabaseSyncStatus('error');
+        setSupabaseMsg('Invalid JSON backup file format. Please upload a valid database backup file.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleExportTenantJson = (propertyCode: string) => {
+    try {
+      const backupObj = exportTenantBackup(propertyCode);
+      const jsonStr = JSON.stringify(backupObj, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `property_backup_${propertyCode.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setSupabaseSyncStatus('success');
+      setSupabaseMsg(`Property workspace [${propertyCode}] backup JSON exported successfully!`);
+    } catch (err: any) {
+      setSupabaseSyncStatus('error');
+      setSupabaseMsg(`Failed to export backup for property ${propertyCode}.`);
+    }
+  };
+
+  const handleImportTenantJson = (propertyCode: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSupabaseSyncStatus('testing');
+    setSupabaseMsg(`Restoring JSON backup for property workspace [${propertyCode}]...`);
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const content = evt.target?.result as string;
+        const parsed = JSON.parse(content);
+        const res = await importTenantBackup(propertyCode, parsed);
+        if (res.success) {
+          setSupabaseSyncStatus('success');
+          setSupabaseMsg(res.message);
+        } else {
+          setSupabaseSyncStatus('error');
+          setSupabaseMsg(res.message);
+        }
+      } catch (err: any) {
+        setSupabaseSyncStatus('error');
+        setSupabaseMsg(`Invalid JSON backup file format for property [${propertyCode}].`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const sqlSetupScript = `-- Run this in Supabase SQL Editor (https://supabase.com/dashboard/project/cnlzyjqyzjqkfcqcuqyj/sql)
+
+-- 1. Create property_state table
+CREATE TABLE IF NOT EXISTS public.property_state (
+    id TEXT PRIMARY KEY,
+    payload JSONB NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Disable Row Level Security (RLS) for seamless client sync
+ALTER TABLE public.property_state DISABLE ROW LEVEL SECURITY;
+
+-- 3. Enable Realtime replication safely (prevents duplicate error 42710)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_rel pr
+    JOIN pg_class c ON pr.prrelid = c.oid
+    JOIN pg_publication p ON pr.prpubid = p.oid
+    WHERE p.pubname = 'supabase_realtime' AND c.relname = 'property_state'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.property_state;
+  END IF;
+END $$;
+`;
+
+  const copySqlScript = () => {
+    navigator.clipboard.writeText(sqlSetupScript);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2000);
   };
 
   const copyApiKey = () => {
@@ -182,7 +362,7 @@ export const TenantManagementView: React.FC = () => {
             </p>
           </div>
 
-          <div className="shrink-0 flex flex-wrap items-center gap-3">
+          <div className="shrink-0 flex flex-wrap items-center gap-2.5">
             <button
               onClick={() => setIsCreateModalOpen(true)}
               className="px-4 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs uppercase tracking-wider rounded-xs flex items-center gap-2 transition-all shadow-md"
@@ -190,6 +370,26 @@ export const TenantManagementView: React.FC = () => {
               <Plus className="w-4 h-4 text-slate-950 shrink-0" />
               <span>Provision New Tenant DB</span>
             </button>
+
+            <button
+              onClick={handleExportFullSystemJson}
+              className="px-3.5 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider rounded-xs flex items-center gap-2 transition-all border border-slate-700"
+              title="Export Full System Database Backup (All Tenants)"
+            >
+              <Download className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Export Full DB JSON</span>
+            </button>
+
+            <label className="px-3.5 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider rounded-xs flex items-center gap-2 transition-all border border-slate-700 cursor-pointer">
+              <Upload className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Import Full DB JSON</span>
+              <input
+                type="file"
+                accept=".json,application/json"
+                onChange={handleImportFullSystemJson}
+                className="hidden"
+              />
+            </label>
           </div>
         </div>
       </div>
@@ -253,14 +453,23 @@ export const TenantManagementView: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
-              onClick={testSupabaseConnection}
+              onClick={handleForceSync}
               disabled={supabaseSyncStatus === 'testing'}
               className="px-3.5 py-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold font-mono text-xs uppercase tracking-wider rounded-xs flex items-center gap-2 transition-all shadow-xs disabled:opacity-50"
             >
               <RefreshCw className={`w-3.5 h-3.5 text-slate-950 ${supabaseSyncStatus === 'testing' ? 'animate-spin' : ''}`} />
-              <span>{supabaseSyncStatus === 'testing' ? 'Testing Connection...' : 'Test Supabase Ping'}</span>
+              <span>Force Sync to Supabase</span>
+            </button>
+
+            <button
+              onClick={testSupabaseConnection}
+              disabled={supabaseSyncStatus === 'testing'}
+              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold font-mono text-xs uppercase tracking-wider rounded-xs flex items-center gap-2 border border-slate-700 transition-all disabled:opacity-50"
+            >
+              <Database className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Test Write Check</span>
             </button>
 
             <a
@@ -270,7 +479,7 @@ export const TenantManagementView: React.FC = () => {
               className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold font-mono text-xs uppercase tracking-wider rounded-xs flex items-center gap-2 border border-slate-700 transition-all"
             >
               <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
-              <span>Open Supabase Dashboard</span>
+              <span>Supabase Dashboard</span>
             </a>
           </div>
         </div>
@@ -306,17 +515,27 @@ export const TenantManagementView: React.FC = () => {
         </div>
 
         {supabaseMsg && (
-          <div className={`p-3 rounded-xs text-xs font-mono font-medium flex items-center gap-2 border ${
+          <div className={`p-3 rounded-xs text-xs font-mono font-medium flex items-center justify-between gap-2 border ${
             supabaseSyncStatus === 'error'
               ? 'bg-rose-950/50 border-rose-800 text-rose-300'
               : 'bg-emerald-950/50 border-emerald-800 text-emerald-300'
           }`}>
-            {supabaseSyncStatus === 'error' ? (
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            ) : (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            )}
-            <span>{supabaseMsg}</span>
+            <div className="flex items-center gap-2">
+              {supabaseSyncStatus === 'error' ? (
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              )}
+              <span>{supabaseMsg}</span>
+            </div>
+
+            <button
+              onClick={copySqlScript}
+              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] uppercase font-bold rounded-xs flex items-center gap-1 border border-slate-700 shrink-0"
+            >
+              {copiedSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+              <span>{copiedSql ? 'SQL Copied' : 'Copy Setup SQL'}</span>
+            </button>
           </div>
         )}
       </div>
@@ -515,47 +734,72 @@ export const TenantManagementView: React.FC = () => {
               </div>
 
               {/* Actions */}
-              <div className="mt-6 pt-4 border-t border-[#E5E5E1] flex items-center justify-between gap-2">
-                <button
-                  onClick={() => setActiveTenantCode(tenant.propertyCode)}
-                  disabled={isActiveScope}
-                  className={`flex-1 py-2 px-3 font-bold text-xs uppercase tracking-wider rounded-xs flex items-center justify-center gap-1.5 transition-colors ${
-                    isActiveScope
-                      ? 'bg-amber-100 text-amber-900 border border-amber-300 cursor-default'
-                      : 'bg-[#1A1A1A] hover:bg-[#333330] text-white'
-                  }`}
-                >
-                  <Globe className="w-3.5 h-3.5 shrink-0" />
-                  <span>{isActiveScope ? 'Active Scope' : 'Switch Workspace'}</span>
-                </button>
+              <div className="mt-6 pt-4 border-t border-[#E5E5E1] space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => setActiveTenantCode(tenant.propertyCode)}
+                    disabled={isActiveScope}
+                    className={`flex-1 py-2 px-3 font-bold text-xs uppercase tracking-wider rounded-xs flex items-center justify-center gap-1.5 transition-colors ${
+                      isActiveScope
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300 cursor-default'
+                        : 'bg-[#1A1A1A] hover:bg-[#333330] text-white'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5 shrink-0" />
+                    <span>{isActiveScope ? 'Active Scope' : 'Switch Workspace'}</span>
+                  </button>
 
-                <button
-                  onClick={() => setEditingTenant(tenant)}
-                  className="p-2 border border-[#E5E5E1] text-[#666662] hover:text-[#1A1A1A] hover:bg-[#F0F0EE] rounded-xs transition-colors"
-                  title={`Edit ${tenant.propertyName} Details`}
-                >
-                  <Pencil className="w-3.5 h-3.5" />
-                </button>
+                  <button
+                    onClick={() => setEditingTenant(tenant)}
+                    className="p-2 border border-[#E5E5E1] text-[#666662] hover:text-[#1A1A1A] hover:bg-[#F0F0EE] rounded-xs transition-colors"
+                    title={`Edit ${tenant.propertyName} Details & Backup`}
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
 
-                <button
-                  onClick={() => handleToggleStatus(tenant)}
-                  className={`p-2 border text-xs font-bold rounded-xs transition-colors ${
-                    tenant.status === 'ACTIVE'
-                      ? 'border-[#E5E5E1] text-[#666662] hover:bg-[#F0F0EE] hover:text-[#1A1A1A]'
-                      : 'border-emerald-300 text-emerald-800 bg-emerald-50 hover:bg-emerald-100'
-                  }`}
-                  title={tenant.status === 'ACTIVE' ? 'Suspend Tenant DB' : 'Activate Tenant DB'}
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                </button>
+                  <button
+                    onClick={() => handleToggleStatus(tenant)}
+                    className={`p-2 border text-xs font-bold rounded-xs transition-colors ${
+                      tenant.status === 'ACTIVE'
+                        ? 'border-[#E5E5E1] text-[#666662] hover:bg-[#F0F0EE] hover:text-[#1A1A1A]'
+                        : 'border-emerald-300 text-emerald-800 bg-emerald-50 hover:bg-emerald-100'
+                    }`}
+                    title={tenant.status === 'ACTIVE' ? 'Suspend Tenant DB' : 'Activate Tenant DB'}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
 
-                <button
-                  onClick={() => handleDeleteWorkspace(tenant)}
-                  className="p-2 border border-[#E5E5E1] text-[#666662] hover:text-[#9E2A2B] hover:bg-rose-50 rounded-xs transition-colors"
-                  title={`Delete ${tenant.propertyName} Workspace`}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                  <button
+                    onClick={() => handleDeleteWorkspace(tenant)}
+                    className="p-2 border border-[#E5E5E1] text-[#666662] hover:text-[#9E2A2B] hover:bg-rose-50 rounded-xs transition-colors"
+                    title={`Delete ${tenant.propertyName} Workspace`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                {/* Quick Property JSON Backup & Restore Row */}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={() => handleExportTenantJson(tenant.propertyCode)}
+                    className="flex-1 py-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold font-mono text-[10px] uppercase tracking-wider rounded-xs flex items-center justify-center gap-1.5 transition-colors"
+                    title={`Download JSON Backup for ${tenant.propertyCode}`}
+                  >
+                    <Download className="w-3 h-3 text-amber-700 shrink-0" />
+                    <span>Export JSON</span>
+                  </button>
+
+                  <label className="flex-1 py-1.5 px-2 bg-[#F9F9F8] hover:bg-[#E5E5E1] text-[#1A1A1A] border border-[#E5E5E1] font-bold font-mono text-[10px] uppercase tracking-wider rounded-xs flex items-center justify-center gap-1.5 cursor-pointer transition-colors">
+                    <Upload className="w-3 h-3 text-emerald-700 shrink-0" />
+                    <span>Import JSON</span>
+                    <input
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={(e) => handleImportTenantJson(tenant.propertyCode, e)}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
               </div>
             </div>
           );

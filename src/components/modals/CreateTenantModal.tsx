@@ -68,14 +68,9 @@ export const CreateTenantModal: React.FC<CreateTenantModalProps> = ({
       return;
     }
 
-    // Check existing property codes
-    const existingTenants = data.tenants || [];
-    const exists = existingTenants.some(
-      (t) => t.propertyCode.toUpperCase() === cleanCode
-    ) || ['VFAR', 'NREE', 'AVANI', 'MJR', 'DEMO', 'GLOBAL'].includes(cleanCode);
-
-    if (exists) {
-      setErrorMsg(`Property Code "${cleanCode}" already exists in the system. Please use a unique property code.`);
+    // Check reserved property codes (only GLOBAL is restricted as a reserved tenant keyword)
+    if (cleanCode === 'GLOBAL') {
+      setErrorMsg('Property Code "GLOBAL" is reserved for Multi-Tenant Super Admin access. Please use a valid property code (e.g. LUX, KUD, ANAN, NREE).');
       return;
     }
 
@@ -272,7 +267,7 @@ export const CreateTenantModal: React.FC<CreateTenantModalProps> = ({
                         type="text"
                         value={propertyCode}
                         onChange={handlePropertyCodeChange}
-                        placeholder="e.g. LUX"
+                        placeholder="e.g. VFAR"
                         maxLength={10}
                         required
                         className="w-full px-3 py-2 border border-[#E5E5E1] text-[#1A1A1A] text-sm font-bold font-mono focus:outline-none focus:border-[#1A1A1A] bg-white uppercase tracking-wider"
@@ -282,7 +277,7 @@ export const CreateTenantModal: React.FC<CreateTenantModalProps> = ({
                       </span>
                     </div>
                     <p className="text-[10px] text-[#A3A39F] mt-1">
-                      Short unique identifier used at login (e.g., VFAR, NREE, LUX, KUD).
+                      Short unique identifier used at login (e.g., VFAR).
                     </p>
                   </div>
 
@@ -294,7 +289,7 @@ export const CreateTenantModal: React.FC<CreateTenantModalProps> = ({
                       type="text"
                       value={propertyName}
                       onChange={(e) => setPropertyName(e.target.value)}
-                      placeholder="e.g. LUX* South Ari Atoll"
+                      placeholder="e.g. Avani+ Fares Maldives Resort"
                       required
                       className="w-full px-3 py-2 border border-[#E5E5E1] text-[#1A1A1A] text-sm font-semibold focus:outline-none focus:border-[#1A1A1A] bg-white"
                     />
@@ -312,7 +307,7 @@ export const CreateTenantModal: React.FC<CreateTenantModalProps> = ({
                         type="text"
                         value={region}
                         onChange={(e) => setRegion(e.target.value)}
-                        placeholder="e.g. South Ari Atoll, Maldives"
+                        placeholder="e.g. Baa Atoll, Maldives"
                         className="w-full pl-8 pr-3 py-2 border border-[#E5E5E1] text-[#1A1A1A] text-xs font-semibold focus:outline-none focus:border-[#1A1A1A] bg-white"
                       />
                     </div>

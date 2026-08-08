@@ -23,7 +23,7 @@ export const LoginPage: React.FC = () => {
   const { data } = useProperty();
 
   const [propertyCode, setPropertyCode] = useState<string>(() => {
-    return localStorage.getItem(REMEMBER_PROPERTY_KEY) || 'VFAR';
+    return localStorage.getItem(REMEMBER_PROPERTY_KEY) || '';
   });
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -67,9 +67,11 @@ export const LoginPage: React.FC = () => {
     setIsLoading(true);
 
     try {
-      // Allow GLOBAL property code or Global Admin bypass
-      const validProperties = ['VFAR', 'NREE', 'AVANI', 'MJR', 'DEMO', 'GLOBAL'];
-      if (cleanEmail.toLowerCase() !== 'admin@admin.com' && !validProperties.includes(cleanPropCode) && cleanPropCode.length < 3) {
+      // Allow GLOBAL property code or check dynamic tenant directory
+      const activeTenants = (data.tenants || []).map((t) => t.propertyCode.toUpperCase());
+      const isKnownProperty = cleanPropCode === 'GLOBAL' || activeTenants.includes(cleanPropCode) || cleanPropCode.length >= 2;
+
+      if (cleanEmail.toLowerCase() !== 'admin@admin.com' && !isKnownProperty) {
         setErrorMessage(`Invalid Property Code: "${cleanPropCode}". Workspace does not exist or is inactive.`);
         setIsLoading(false);
         return;
@@ -137,26 +139,6 @@ export const LoginPage: React.FC = () => {
 
           {/* Form View */}
           <div className="p-6 sm:p-8 space-y-6">
-            {/* Global Admin Quick Autofill Badge */}
-            <div className="p-3 bg-amber-50/80 border border-amber-300 rounded-xs flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs text-amber-950 font-semibold flex items-center gap-2">
-                <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
-                <span>Global Multi-Tenant Super Admin Credentials</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setPropertyCode('GLOBAL');
-                  setEmail('admin@admin.com');
-                  setPassword('admin');
-                  setErrorMessage('');
-                }}
-                className="px-2.5 py-1 bg-amber-700 hover:bg-amber-800 text-white font-mono font-bold text-[10px] uppercase tracking-wider rounded-xs transition-colors"
-              >
-                Autofill admin@admin.com
-              </button>
-            </div>
-
             {errorMessage && (
               <div className="p-4 bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-start gap-3 rounded-xs">
                 <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
@@ -171,7 +153,7 @@ export const LoginPage: React.FC = () => {
               {/* Field 1: Property Code */}
               <div>
                 <label className="block text-[10px] font-bold text-[#A3A39F] uppercase tracking-widest mb-1.5">
-                  Property Code (e.g. VFAR or NREE) *
+                  Property Code (e.g. VFAR) *
                 </label>
                 <div className="relative">
                   <Building2 className="w-4 h-4 text-[#A3A39F] absolute left-3 top-3" />
@@ -189,7 +171,7 @@ export const LoginPage: React.FC = () => {
                   </div>
                 </div>
                 <p className="text-[10px] text-[#A3A39F] mt-1">
-                  Example codes: <strong className="text-[#1A1A1A]">VFAR</strong> (Avani+ Fares) or <strong className="text-[#1A1A1A]">NREE</strong> (Niyama Resort).
+                  Example codes: <strong className="text-[#1A1A1A]">VFAR</strong> for Avani+ Fares Maldives Resort.
                 </p>
               </div>
 

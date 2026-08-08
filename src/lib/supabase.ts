@@ -21,34 +21,41 @@ export async function fetchFromSupabase() {
       .maybeSingle();
 
     if (error) {
-      console.warn('Supabase fetch notice (property_state table may not be initialized yet):', error.message);
-      return null;
+      console.warn('Supabase fetch notice:', error.message);
+      return { data: null, error: error.message };
     }
-    return data?.payload || null;
-  } catch (err) {
-    console.warn('Supabase connection or query error:', err);
-    return null;
+    return { data: data?.payload || null, error: null };
+  } catch (err: any) {
+    const msg = err?.message || 'Connection failed';
+    console.warn('Supabase fetch exception:', msg);
+    return { data: null, error: msg };
   }
 }
 
 // Helper to persist to Supabase property_state table
 export async function saveToSupabase(payload: any) {
+  if (!payload || typeof payload !== 'object' || !Array.isArray(payload.buildings) || payload.buildings.length === 0) {
+    console.warn('saveToSupabase skipped: payload is invalid or empty', payload);
+    return { success: false, error: 'Cannot save empty or invalid property state' };
+  }
+
   try {
     const { error } = await supabase
       .from('property_state')
       .upsert({
         id: 'global_raw_v1',
-        payload,
+        payload: payload,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'id' });
 
     if (error) {
-      console.warn('Supabase save notice (table property_state might need creation):', error.message);
-      return false;
+      console.warn('Supabase save notice:', error.message);
+      return { success: false, error: error.message };
     }
-    return true;
-  } catch (err) {
-    console.warn('Failed saving to Supabase:', err);
-    return false;
+    return { success: true, error: null };
+  } catch (err: any) {
+    const msg = err?.message || 'Save failed';
+    console.warn('Failed saving to Supabase:', msg);
+    return { success: false, error: msg };
   }
 }

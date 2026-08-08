@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import {
   PropertyData,
   Building,
@@ -155,6 +155,15 @@ interface PropertyContextType {
     updates: Partial<Omit<TenantWorkspace, 'id' | 'createdAt'>>
   ) => Promise<void>;
   deleteTenantWorkspace: (propertyCode: string) => Promise<boolean>;
+  exportTenantBackup: (propertyCode: string) => any;
+  importTenantBackup: (
+    propertyCode: string,
+    importedPayload: any
+  ) => Promise<{ success: boolean; message: string }>;
+  exportFullBackup: () => any;
+  importFullBackup: (
+    importedPayload: any
+  ) => Promise<{ success: boolean; message: string }>;
 
   // Global Helpers
   writeLog: (
@@ -349,18 +358,24 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
     setIsMobileMenuOpen((prev) => !prev);
   };
 
+  const isRemoteUpdateRef = useRef<boolean>(true);
+
   // Initial load and real-time subscription from Supabase
   useEffect(() => {
     let isMounted = true;
 
     // Initial fetch from Supabase
-    fetchFromSupabase().then((remoteData) => {
+    fetchFromSupabase().then(({ data: remoteData, error }) => {
       if (isMounted) {
         if (remoteData && Array.isArray(remoteData.buildings) && remoteData.buildings.length > 0) {
+          isRemoteUpdateRef.current = true;
           setRawCollections(remoteData);
-        } else {
+        } else if (!error) {
           // Push initial dataset if table was newly created and empty
-          saveToSupabase(rawCollections);
+          const fallbackData = (rawCollections && Array.isArray(rawCollections.buildings) && rawCollections.buildings.length > 0)
+            ? rawCollections
+            : getInitialRawData();
+          saveToSupabase(fallbackData);
         }
       }
     });
@@ -374,7 +389,8 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
         (payload) => {
           if (payload.new && (payload.new as any).payload) {
             const updatedState = (payload.new as any).payload;
-            if (Array.isArray(updatedState.buildings)) {
+            if (Array.isArray(updatedState.buildings) && updatedState.buildings.length > 0) {
+              isRemoteUpdateRef.current = true;
               setRawCollections(updatedState);
             }
           }
@@ -388,13 +404,32 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
     };
   }, []);
 
-  // Sync data when rawCollections or activeTenantCode changes
+  // Compute filtered view and sync localStorage when rawCollections or tenant workspace filter changes
   useEffect(() => {
-    const computed = computeFilteredData(rawCollections, activeTenantCode);
-    setData(computed);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(rawCollections));
-    saveToSupabase(rawCollections);
+    if (rawCollections && Array.isArray(rawCollections.buildings) && rawCollections.buildings.length > 0) {
+      const computed = computeFilteredData(rawCollections, activeTenantCode);
+      setData(computed);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(rawCollections));
+    }
   }, [rawCollections, activeTenantCode]);
+
+  // Save to Supabase with debouncing when local rawCollections is updated by user actions
+  useEffect(() => {
+    if (!rawCollections || !Array.isArray(rawCollections.buildings) || rawCollections.buildings.length === 0) {
+      return;
+    }
+
+    if (isRemoteUpdateRef.current) {
+      isRemoteUpdateRef.current = false;
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      saveToSupabase(rawCollections);
+    }, 800);
+
+    return () => clearTimeout(timer);
+  }, [rawCollections]);
 
   const updateRaw = (updater: (prev: RawCollectionsData) => RawCollectionsData) => {
     setRawCollections((prev) => updater(prev));
@@ -1436,6 +1471,202 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
     return true;
   };
 
+  const exportTenantBackup = (propertyCode: string) => {
+    const code = propertyCode.toUpperCase();
+    const tenant = rawCollections.tenants.find((t) => (t.propertyCode || '').toUpperCase() === code);
+    const buildings = rawCollections.buildings.filter((b) => (b.propertyCode || 'VFAR').toUpperCase() === code);
+    const floors = rawCollections.floors.filter((f) => (f.propertyCode || 'VFAR').toUpperCase() === code);
+    const rooms = rawCollections.rooms.filter((r) => (r.propertyCode || 'VFAR').toUpperCase() === code);
+    const beds = rawCollections.beds.filter((bd) => (bd.propertyCode || 'VFAR').toUpperCase() === code);
+    const maintenanceRequests = rawCollections.maintenanceRequests.filter(
+      (m) => (m.propertyCode || 'VFAR').toUpperCase() === code
+    );
+    const foodWasteLogs = rawCollections.foodWasteLogs.filter(
+      (w) => (w.propertyCode || 'VFAR').toUpperCase() === code
+    );
+    const users = rawCollections.users.filter(
+      (u) => (u.propertyCode || 'VFAR').toUpperCase() === code
+    );
+
+    return {
+      version: '1.0',
+      exportType: 'PROPERTY_TENANT_BACKUP',
+      exportDate: new Date().toISOString(),
+      propertyCode: code,
+      tenant: tenant || { propertyCode: code, propertyName: code, status: 'ACTIVE' },
+      buildings,
+      floors,
+      rooms,
+      beds,
+      maintenanceRequests,
+      foodWasteLogs,
+      users,
+      roomTypes: rawCollections.roomTypes,
+      statuses: rawCollections.statuses,
+    };
+  };
+
+  const exportFullBackup = () => {
+    return {
+      version: '1.0',
+      exportType: 'FULL_SYSTEM_BACKUP',
+      exportDate: new Date().toISOString(),
+      rawCollections,
+    };
+  };
+
+  const importFullBackup = async (
+    importedPayload: any
+  ): Promise<{ success: boolean; message: string }> => {
+    if (!importedPayload || typeof importedPayload !== 'object') {
+      return { success: false, message: 'Invalid JSON backup file structure.' };
+    }
+
+    const payload = importedPayload.rawCollections || importedPayload;
+
+    if (!Array.isArray(payload.buildings)) {
+      return { success: false, message: 'JSON backup does not contain valid property data.' };
+    }
+
+    try {
+      const newRawState: RawCollectionsData = {
+        buildings: Array.isArray(payload.buildings) ? payload.buildings : [],
+        floors: Array.isArray(payload.floors) ? payload.floors : [],
+        roomTypes: Array.isArray(payload.roomTypes) && payload.roomTypes.length > 0 ? payload.roomTypes : rawCollections.roomTypes,
+        statuses: Array.isArray(payload.statuses) && payload.statuses.length > 0 ? payload.statuses : rawCollections.statuses,
+        rooms: Array.isArray(payload.rooms) ? payload.rooms : [],
+        beds: Array.isArray(payload.beds) ? payload.beds : [],
+        logs: Array.isArray(payload.logs) ? payload.logs : [],
+        users: Array.isArray(payload.users) ? payload.users : [],
+        maintenanceRequests: Array.isArray(payload.maintenanceRequests) ? payload.maintenanceRequests : [],
+        foodWasteLogs: Array.isArray(payload.foodWasteLogs) ? payload.foodWasteLogs : [],
+        tenants: Array.isArray(payload.tenants) ? payload.tenants : [],
+      };
+
+      isRemoteUpdateRef.current = false;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newRawState));
+      setRawCollections(newRawState);
+      setData(computeFilteredData(newRawState, activeTenantCode));
+      await saveToSupabase(newRawState);
+
+      await writeLog(
+        'SETTING_CHANGE',
+        'Full System Database Backup Restored',
+        `Entire multi-tenant database JSON backup imported & restored successfully.`
+      );
+
+      return {
+        success: true,
+        message: `Entire system database backup imported successfully! (${newRawState.tenants.length} tenants, ${newRawState.buildings.length} buildings, ${newRawState.rooms.length} rooms).`,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Failed to restore full database backup: ${err?.message || 'Unknown error'}`,
+      };
+    }
+  };
+
+  const importTenantBackup = async (
+    targetPropertyCode: string,
+    importedPayload: any
+  ): Promise<{ success: boolean; message: string }> => {
+    if (!importedPayload || typeof importedPayload !== 'object') {
+      return { success: false, message: 'Invalid JSON backup file structure.' };
+    }
+
+    // Redirect to full backup import if payload is a full system backup
+    if (importedPayload.exportType === 'FULL_SYSTEM_BACKUP' || importedPayload.rawCollections) {
+      return importFullBackup(importedPayload);
+    }
+
+    const code = (targetPropertyCode || importedPayload.propertyCode || importedPayload.tenant?.propertyCode || 'VFAR').toUpperCase();
+
+    try {
+      const prev = rawCollections;
+
+      const nextBldgs = prev.buildings.filter((b) => (b.propertyCode || 'VFAR').toUpperCase() !== code);
+      const nextFloors = prev.floors.filter((f) => (f.propertyCode || 'VFAR').toUpperCase() !== code);
+      const nextRooms = prev.rooms.filter((r) => (r.propertyCode || 'VFAR').toUpperCase() !== code);
+      const nextBeds = prev.beds.filter((bd) => (bd.propertyCode || 'VFAR').toUpperCase() !== code);
+      const nextMaint = prev.maintenanceRequests.filter(
+        (m) => (m.propertyCode || 'VFAR').toUpperCase() !== code
+      );
+      const nextWaste = prev.foodWasteLogs.filter(
+        (w) => (w.propertyCode || 'VFAR').toUpperCase() !== code
+      );
+      const nextUsers = prev.users.filter(
+        (u) => u.role === 'Global Admin' || (u.propertyCode || 'VFAR').toUpperCase() !== code
+      );
+      const nextTenants = prev.tenants.filter((t) => t.propertyCode.toUpperCase() !== code);
+
+      const impBuildings = Array.isArray(importedPayload.buildings)
+        ? importedPayload.buildings.map((b: any) => ({ ...b, propertyCode: code }))
+        : [];
+      const impFloors = Array.isArray(importedPayload.floors)
+        ? importedPayload.floors.map((f: any) => ({ ...f, propertyCode: code }))
+        : [];
+      const impRooms = Array.isArray(importedPayload.rooms)
+        ? importedPayload.rooms.map((r: any) => ({ ...r, propertyCode: code }))
+        : [];
+      const impBeds = Array.isArray(importedPayload.beds)
+        ? importedPayload.beds.map((bd: any) => ({ ...bd, propertyCode: code }))
+        : [];
+      const impMaint = Array.isArray(importedPayload.maintenanceRequests)
+        ? importedPayload.maintenanceRequests.map((m: any) => ({ ...m, propertyCode: code }))
+        : [];
+      const impWaste = Array.isArray(importedPayload.foodWasteLogs)
+        ? importedPayload.foodWasteLogs.map((w: any) => ({ ...w, propertyCode: code }))
+        : [];
+      const impUsers = Array.isArray(importedPayload.users)
+        ? importedPayload.users.map((u: any) => ({ ...u, propertyCode: code }))
+        : [];
+      const impTenant = importedPayload.tenant
+        ? { ...importedPayload.tenant, propertyCode: code }
+        : prev.tenants.find((t) => t.propertyCode.toUpperCase() === code) || {
+            id: `tenant-${code.toLowerCase()}`,
+            propertyName: importedPayload.propertyName || code,
+            propertyCode: code,
+            status: 'ACTIVE',
+            createdAt: new Date().toISOString(),
+          };
+
+      const newRawState: RawCollectionsData = {
+        ...prev,
+        tenants: [...nextTenants, impTenant],
+        buildings: [...nextBldgs, ...impBuildings],
+        floors: [...nextFloors, ...impFloors],
+        rooms: [...nextRooms, ...impRooms],
+        beds: [...nextBeds, ...impBeds],
+        maintenanceRequests: [...nextMaint, ...impMaint],
+        foodWasteLogs: [...nextWaste, ...impWaste],
+        users: [...nextUsers, ...impUsers],
+      };
+
+      isRemoteUpdateRef.current = false;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(newRawState));
+      setRawCollections(newRawState);
+      setData(computeFilteredData(newRawState, activeTenantCode));
+      await saveToSupabase(newRawState);
+
+      await writeLog(
+        'SETTING_CHANGE',
+        'Tenant Backup Restored',
+        `JSON backup restored for tenant workspace [${code}].`
+      );
+
+      return {
+        success: true,
+        message: `Property workspace [${code}] database backup imported & restored successfully! (${impBuildings.length} buildings, ${impRooms.length} rooms, ${impBeds.length} beds restored)`,
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `Failed to parse or import JSON backup: ${err?.message || 'Unknown error'}`,
+      };
+    }
+  };
+
   return (
     <PropertyContext.Provider
       value={{
@@ -1490,6 +1721,10 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
         updateTenantStatus,
         updateTenantWorkspace,
         deleteTenantWorkspace,
+        exportTenantBackup,
+        importTenantBackup,
+        exportFullBackup,
+        importFullBackup,
 
         writeLog,
         resetToDefaults,
