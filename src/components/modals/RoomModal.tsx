@@ -18,7 +18,7 @@ export const RoomModal: React.FC<RoomModalProps> = ({ isOpen, onClose, roomToEdi
   const [roomNumber, setRoomNumber] = useState<string>('');
   const [roomTypeId, setRoomTypeId] = useState<string>('');
   const [totalBeds, setTotalBeds] = useState<number>(1);
-  const [statusId, setStatusId] = useState<string>('status-vacant');
+  const [statusId, setStatusId] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
   const [showConfirmDelete, setShowConfirmDelete] = useState<boolean>(false);
 
@@ -40,7 +40,14 @@ export const RoomModal: React.FC<RoomModalProps> = ({ isOpen, onClose, roomToEdi
       const defaultType = data.roomTypes[0];
       setRoomTypeId(defaultType?.id || '');
       setTotalBeds(defaultType?.defaultBedCount || 1);
-      setStatusId('status-vacant');
+      const vacantStatus =
+        data.statuses.find(
+          (s) =>
+            !s.isOccupiedState &&
+            !s.isMaintenanceState &&
+            (s.name.toLowerCase().includes('vacant') || s.id.includes('vacant'))
+        ) || data.statuses[0];
+      setStatusId(vacantStatus?.id || 'status-vacant');
       setNotes('');
     }
   }, [roomToEdit, isOpen, data]);

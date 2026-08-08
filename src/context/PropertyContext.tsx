@@ -194,13 +194,36 @@ export const recalculateRoomStatus = (
   roomId: string,
   targetBedStatusId: string
 ): string => {
+  const vacantStatusId =
+    allStatuses.find(
+      (s) =>
+        !s.isOccupiedState &&
+        !s.isMaintenanceState &&
+        (s.name.toLowerCase().includes('vacant') || s.id.includes('vacant'))
+    )?.id || 'status-vacant';
+  const occupiedStatusId =
+    allStatuses.find(
+      (s) =>
+        s.isOccupiedState &&
+        (s.name.toLowerCase() === 'occupied' || s.id.includes('occupied'))
+    )?.id || 'status-occupied';
+  const partiallyStatusId =
+    allStatuses.find(
+      (s) =>
+        s.isOccupiedState &&
+        (s.name.toLowerCase().includes('partially') || s.id.includes('partially'))
+    )?.id || 'status-partially';
+  const maintenanceStatusId =
+    allStatuses.find((s) => s.isMaintenanceState || s.id.includes('maintenance'))?.id ||
+    'status-maintenance';
+
   const targetStatus = allStatuses.find((s) => s.id === targetBedStatusId);
   if (targetStatus?.isMaintenanceState === true) {
-    return 'status-maintenance';
+    return maintenanceStatusId;
   }
 
   const roomBeds = allBeds.filter((b) => b.roomId === roomId);
-  if (roomBeds.length === 0) return 'status-vacant';
+  if (roomBeds.length === 0) return vacantStatusId;
 
   const occupiedBeds = roomBeds.filter((b) => {
     const statusObj = allStatuses.find((s) => s.id === b.statusId);
@@ -213,18 +236,18 @@ export const recalculateRoomStatus = (
   }).length;
 
   if (maintenanceBeds === roomBeds.length) {
-    return 'status-maintenance';
+    return maintenanceStatusId;
   }
 
   if (occupiedBeds === 0) {
-    return 'status-vacant';
+    return vacantStatusId;
   }
 
   if (occupiedBeds === roomBeds.length) {
-    return 'status-occupied';
+    return occupiedStatusId;
   }
 
-  return 'status-partially';
+  return partiallyStatusId;
 };
 
 const getInitialRawData = (): RawCollectionsData => {
@@ -314,14 +337,128 @@ const computeFilteredData = (raw: RawCollectionsData, tenantCode: string): Prope
     ? raw.users
     : raw.users.filter((u) => u.role === 'Global Admin' || (u.propertyCode || 'VFAR') === code);
 
+  let filteredRoomTypes = code === 'ALL'
+    ? raw.roomTypes
+    : raw.roomTypes.filter((rt) => (rt.propertyCode || 'VFAR').toUpperCase() === code.toUpperCase());
+
+  if (code !== 'ALL' && filteredRoomTypes.length === 0) {
+    filteredRoomTypes = [
+      {
+        id: `rtype-${code.toLowerCase()}-1`,
+        name: 'Single Deluxe',
+        defaultBedCount: 1,
+        description: 'Private room with single bed and desk workspace',
+        badgeColor: '#3b82f6',
+        propertyCode: code,
+      },
+      {
+        id: `rtype-${code.toLowerCase()}-2`,
+        name: 'Studio Twin',
+        defaultBedCount: 2,
+        description: 'Two single beds with kitchenette and private bath',
+        badgeColor: '#10b981',
+        propertyCode: code,
+      },
+      {
+        id: `rtype-${code.toLowerCase()}-3`,
+        name: '4-Bed Shared Dorm',
+        defaultBedCount: 4,
+        description: 'Shared dorm with 4 bunk bed slots and individual lockers',
+        badgeColor: '#8b5cf6',
+        propertyCode: code,
+      },
+      {
+        id: `rtype-${code.toLowerCase()}-4`,
+        name: 'Executive Suite',
+        defaultBedCount: 1,
+        description: 'Premium suite with living area and master bed',
+        badgeColor: '#f59e0b',
+        propertyCode: code,
+      },
+    ];
+  }
+
+  let filteredStatuses = code === 'ALL'
+    ? raw.statuses
+    : raw.statuses.filter((s) => (s.propertyCode || 'VFAR').toUpperCase() === code.toUpperCase());
+
+  if (code !== 'ALL' && filteredStatuses.length === 0) {
+    filteredStatuses = [
+      {
+        id: `status-${code.toLowerCase()}-vacant`,
+        name: 'Vacant',
+        type: 'both',
+        color: '#10b981',
+        description: 'Ready for immediate check-in',
+        isOccupiedState: false,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-occupied`,
+        name: 'Occupied',
+        type: 'both',
+        color: '#3b82f6',
+        description: 'Fully occupied bed or room',
+        isOccupiedState: true,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-partially`,
+        name: 'Partially Occupied',
+        type: 'room',
+        color: '#06b6d4',
+        description: 'Room has available beds remaining',
+        isOccupiedState: true,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-reserved`,
+        name: 'Reserved',
+        type: 'both',
+        color: '#8b5cf6',
+        description: 'Held for upcoming team member arrival',
+        isOccupiedState: false,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-cleaning`,
+        name: 'Cleaning in Progress',
+        type: 'room',
+        color: '#f59e0b',
+        description: 'Turnover cleaning undergoing',
+        isOccupiedState: false,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-maintenance`,
+        name: 'Maintenance',
+        type: 'both',
+        color: '#ef4444',
+        description: 'Out of service due to repairs',
+        isOccupiedState: false,
+        isMaintenanceState: true,
+        propertyCode: code,
+      },
+    ];
+  }
+
+  const filteredLogs = code === 'ALL'
+    ? sortedLogs
+    : sortedLogs.filter((l) => (l.propertyCode || 'VFAR') === code);
+
   return {
     buildings: filteredBldgs,
     floors: filteredFloors,
-    roomTypes: raw.roomTypes,
-    statuses: raw.statuses,
+    roomTypes: filteredRoomTypes,
+    statuses: filteredStatuses,
     rooms: filteredRooms,
     beds: filteredBeds,
-    logs: sortedLogs,
+    logs: filteredLogs,
     users: filteredUsers,
     maintenanceRequests: filteredMaint,
     foodWasteLogs: filteredWaste,
@@ -457,6 +594,7 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
       action,
       title,
       details,
+      propertyCode: activeTenantCode,
       actor: actorInfo?.actor || 'Admin',
       actorEmail: actorInfo?.actorEmail,
       actorRole: actorInfo?.actorRole,
@@ -591,6 +729,7 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
       defaultBedCount,
       description,
       badgeColor,
+      propertyCode: activeTenantCode,
     };
 
     updateRaw((prev) => ({
@@ -621,18 +760,27 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
   };
 
   const deleteRoomType = async (id: string, force = false): Promise<boolean> => {
-    const associatedRooms = rawCollections.rooms.filter((r) => r.roomTypeId === id);
+    const activeRooms = rawCollections.rooms.filter(
+      (r) => (r.propertyCode || 'VFAR').toUpperCase() === activeTenantCode.toUpperCase()
+    );
+    const associatedRooms = activeRooms.filter((r) => r.roomTypeId === id);
     if (associatedRooms.length > 0 && !force) {
       return false;
     }
 
-    const fallbackType = rawCollections.roomTypes.find((rt) => rt.id !== id);
+    const fallbackType = rawCollections.roomTypes.find(
+      (rt) => (rt.propertyCode || 'VFAR').toUpperCase() === activeTenantCode.toUpperCase() && rt.id !== id
+    );
+
+    const fallbackTypeId = fallbackType?.id || `rtype-${activeTenantCode.toLowerCase()}-1`;
 
     updateRaw((prev) => ({
       ...prev,
       roomTypes: prev.roomTypes.filter((rt) => rt.id !== id),
       rooms: prev.rooms.map((r) =>
-        r.roomTypeId === id ? { ...r, roomTypeId: fallbackType?.id || 'rtype-std' } : r
+        r.roomTypeId === id && (r.propertyCode || 'VFAR').toUpperCase() === activeTenantCode.toUpperCase()
+          ? { ...r, roomTypeId: fallbackTypeId }
+          : r
       ),
     }));
 
@@ -650,13 +798,14 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
     isMaintenanceState: boolean = false
   ) => {
     const newStatus: StatusCategory = {
-      id: `status-${Date.now()}`,
+      id: `status-${activeTenantCode.toLowerCase()}-${Date.now()}`,
       name,
       type,
       color,
       description,
       isOccupiedState,
       isMaintenanceState,
+      propertyCode: activeTenantCode,
     };
 
     updateRaw((prev) => ({
@@ -688,6 +837,7 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
               description: description || '',
               isOccupiedState: isOccupiedState ?? false,
               isMaintenanceState: isMaintenanceState ?? false,
+              propertyCode: s.propertyCode || activeTenantCode,
             }
           : s
       ),
@@ -697,17 +847,38 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
   };
 
   const deleteStatusCategory = async (id: string, force = false): Promise<boolean> => {
-    const inUseRooms = rawCollections.rooms.filter((r) => r.statusId === id);
-    const inUseBeds = rawCollections.beds.filter((b) => b.statusId === id);
+    const activeRooms = rawCollections.rooms.filter(
+      (r) => (r.propertyCode || 'VFAR').toUpperCase() === activeTenantCode.toUpperCase()
+    );
+    const activeBeds = rawCollections.beds.filter(
+      (b) => (b.propertyCode || 'VFAR').toUpperCase() === activeTenantCode.toUpperCase()
+    );
+
+    const inUseRooms = activeRooms.filter((r) => r.statusId === id);
+    const inUseBeds = activeBeds.filter((b) => b.statusId === id);
     if ((inUseRooms.length > 0 || inUseBeds.length > 0) && !force) {
       return false;
     }
 
+    const fallbackStatus = rawCollections.statuses.find(
+      (s) => (s.propertyCode || 'VFAR').toUpperCase() === activeTenantCode.toUpperCase() && s.id !== id
+    );
+
+    const fallbackStatusId = fallbackStatus?.id || `status-${activeTenantCode.toLowerCase()}-vacant`;
+
     updateRaw((prev) => ({
       ...prev,
       statuses: prev.statuses.filter((s) => s.id !== id),
-      rooms: prev.rooms.map((r) => (r.statusId === id ? { ...r, statusId: 'status-vacant' } : r)),
-      beds: prev.beds.map((b) => (b.statusId === id ? { ...b, statusId: 'status-vacant' } : b)),
+      rooms: prev.rooms.map((r) =>
+        r.statusId === id && (r.propertyCode || 'VFAR').toUpperCase() === activeTenantCode.toUpperCase()
+          ? { ...r, statusId: fallbackStatusId }
+          : r
+      ),
+      beds: prev.beds.map((b) =>
+        b.statusId === id && (b.propertyCode || 'VFAR').toUpperCase() === activeTenantCode.toUpperCase()
+          ? { ...b, statusId: fallbackStatusId }
+          : b
+      ),
     }));
 
     await writeLog('SETTING_CHANGE', 'Status Category Deleted', `Deleted status category ID ${id}`);
@@ -1378,6 +1549,104 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
       createdAt: new Date().toISOString(),
     };
 
+    const defaultRoomTypesForTenant: RoomType[] = [
+      {
+        id: `rtype-${code.toLowerCase()}-1`,
+        name: 'Single Deluxe',
+        defaultBedCount: 1,
+        description: 'Private room with single bed and desk workspace',
+        badgeColor: '#3b82f6',
+        propertyCode: code,
+      },
+      {
+        id: `rtype-${code.toLowerCase()}-2`,
+        name: 'Studio Twin',
+        defaultBedCount: 2,
+        description: 'Two single beds with kitchenette and private bath',
+        badgeColor: '#10b981',
+        propertyCode: code,
+      },
+      {
+        id: `rtype-${code.toLowerCase()}-3`,
+        name: '4-Bed Shared Dorm',
+        defaultBedCount: 4,
+        description: 'Shared dorm with 4 bunk bed slots and individual lockers',
+        badgeColor: '#8b5cf6',
+        propertyCode: code,
+      },
+      {
+        id: `rtype-${code.toLowerCase()}-4`,
+        name: 'Executive Suite',
+        defaultBedCount: 1,
+        description: 'Premium suite with living area and master bed',
+        badgeColor: '#f59e0b',
+        propertyCode: code,
+      },
+    ];
+
+    const defaultStatusesForTenant: StatusCategory[] = [
+      {
+        id: `status-${code.toLowerCase()}-vacant`,
+        name: 'Vacant',
+        type: 'both',
+        color: '#10b981',
+        description: 'Ready for immediate check-in',
+        isOccupiedState: false,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-occupied`,
+        name: 'Occupied',
+        type: 'both',
+        color: '#3b82f6',
+        description: 'Fully occupied bed or room',
+        isOccupiedState: true,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-partially`,
+        name: 'Partially Occupied',
+        type: 'room',
+        color: '#06b6d4',
+        description: 'Room has available beds remaining',
+        isOccupiedState: true,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-reserved`,
+        name: 'Reserved',
+        type: 'both',
+        color: '#8b5cf6',
+        description: 'Held for upcoming team member arrival',
+        isOccupiedState: false,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-cleaning`,
+        name: 'Cleaning in Progress',
+        type: 'room',
+        color: '#f59e0b',
+        description: 'Turnover cleaning undergoing',
+        isOccupiedState: false,
+        isMaintenanceState: false,
+        propertyCode: code,
+      },
+      {
+        id: `status-${code.toLowerCase()}-maintenance`,
+        name: 'Maintenance',
+        type: 'both',
+        color: '#ef4444',
+        description: 'Out of service due to repairs',
+        isOccupiedState: false,
+        isMaintenanceState: true,
+        propertyCode: code,
+      },
+    ];
+
     updateRaw((prev) => ({
       ...prev,
       tenants: [...prev.tenants.filter((t) => t.propertyCode !== code), createdWorkspace],
@@ -1386,6 +1655,8 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
       rooms: [...prev.rooms, ...newRms],
       beds: [...prev.beds, ...newBds],
       users: [...prev.users, adminUser],
+      roomTypes: [...prev.roomTypes, ...defaultRoomTypesForTenant],
+      statuses: [...prev.statuses, ...defaultStatusesForTenant],
     }));
 
     await writeLog(
@@ -1445,6 +1716,9 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
       floors: prev.floors.filter((f) => (f.propertyCode || 'VFAR').toUpperCase() !== code),
       rooms: prev.rooms.filter((r) => (r.propertyCode || 'VFAR').toUpperCase() !== code),
       beds: prev.beds.filter((bd) => (bd.propertyCode || 'VFAR').toUpperCase() !== code),
+      roomTypes: prev.roomTypes.filter((rt) => (rt.propertyCode || 'VFAR').toUpperCase() !== code),
+      statuses: prev.statuses.filter((s) => (s.propertyCode || 'VFAR').toUpperCase() !== code),
+      logs: prev.logs.filter((l) => (l.propertyCode || 'VFAR').toUpperCase() !== code),
       maintenanceRequests: prev.maintenanceRequests.filter(
         (m) => (m.propertyCode || 'VFAR').toUpperCase() !== code
       ),
@@ -1478,6 +1752,9 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
     const floors = rawCollections.floors.filter((f) => (f.propertyCode || 'VFAR').toUpperCase() === code);
     const rooms = rawCollections.rooms.filter((r) => (r.propertyCode || 'VFAR').toUpperCase() === code);
     const beds = rawCollections.beds.filter((bd) => (bd.propertyCode || 'VFAR').toUpperCase() === code);
+    const roomTypes = rawCollections.roomTypes.filter((rt) => (rt.propertyCode || 'VFAR').toUpperCase() === code);
+    const statuses = rawCollections.statuses.filter((s) => (s.propertyCode || 'VFAR').toUpperCase() === code);
+    const logs = rawCollections.logs.filter((l) => (l.propertyCode || 'VFAR').toUpperCase() === code);
     const maintenanceRequests = rawCollections.maintenanceRequests.filter(
       (m) => (m.propertyCode || 'VFAR').toUpperCase() === code
     );
@@ -1498,11 +1775,12 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
       floors,
       rooms,
       beds,
+      roomTypes,
+      statuses,
+      logs,
       maintenanceRequests,
       foodWasteLogs,
       users,
-      roomTypes: rawCollections.roomTypes,
-      statuses: rawCollections.statuses,
     };
   };
 
@@ -1589,6 +1867,9 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
       const nextFloors = prev.floors.filter((f) => (f.propertyCode || 'VFAR').toUpperCase() !== code);
       const nextRooms = prev.rooms.filter((r) => (r.propertyCode || 'VFAR').toUpperCase() !== code);
       const nextBeds = prev.beds.filter((bd) => (bd.propertyCode || 'VFAR').toUpperCase() !== code);
+      const nextRoomTypes = prev.roomTypes.filter((rt) => (rt.propertyCode || 'VFAR').toUpperCase() !== code);
+      const nextStatuses = prev.statuses.filter((s) => (s.propertyCode || 'VFAR').toUpperCase() !== code);
+      const nextLogs = prev.logs.filter((l) => (l.propertyCode || 'VFAR').toUpperCase() !== code);
       const nextMaint = prev.maintenanceRequests.filter(
         (m) => (m.propertyCode || 'VFAR').toUpperCase() !== code
       );
@@ -1611,6 +1892,15 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
         : [];
       const impBeds = Array.isArray(importedPayload.beds)
         ? importedPayload.beds.map((bd: any) => ({ ...bd, propertyCode: code }))
+        : [];
+      const impRoomTypes = Array.isArray(importedPayload.roomTypes)
+        ? importedPayload.roomTypes.map((rt: any) => ({ ...rt, propertyCode: code }))
+        : [];
+      const impStatuses = Array.isArray(importedPayload.statuses)
+        ? importedPayload.statuses.map((s: any) => ({ ...s, propertyCode: code }))
+        : [];
+      const impLogs = Array.isArray(importedPayload.logs)
+        ? importedPayload.logs.map((l: any) => ({ ...l, propertyCode: code }))
         : [];
       const impMaint = Array.isArray(importedPayload.maintenanceRequests)
         ? importedPayload.maintenanceRequests.map((m: any) => ({ ...m, propertyCode: code }))
@@ -1638,6 +1928,9 @@ export const PropertyProvider: React.FC<{ children: ReactNode }> = ({ children }
         floors: [...nextFloors, ...impFloors],
         rooms: [...nextRooms, ...impRooms],
         beds: [...nextBeds, ...impBeds],
+        roomTypes: [...nextRoomTypes, ...impRoomTypes],
+        statuses: [...nextStatuses, ...impStatuses],
+        logs: [...nextLogs, ...impLogs],
         maintenanceRequests: [...nextMaint, ...impMaint],
         foodWasteLogs: [...nextWaste, ...impWaste],
         users: [...nextUsers, ...impUsers],

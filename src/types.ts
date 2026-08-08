@@ -22,6 +22,7 @@ export interface RoomType {
   defaultBedCount: number;
   description?: string;
   badgeColor: string; // e.g., 'blue', 'emerald', 'purple', 'amber', 'rose', 'indigo'
+  propertyCode?: string;
 }
 
 export interface StatusCategory {
@@ -32,6 +33,7 @@ export interface StatusCategory {
   description?: string;
   isOccupiedState?: boolean;
   isMaintenanceState?: boolean;
+  propertyCode?: string;
 }
 
 export interface BedAssignment {
@@ -187,6 +189,7 @@ export interface ActivityLog {
     | 'ROLE_SWITCH';
   title: string;
   details: string;
+  propertyCode?: string;
   actor?: string;
   actorEmail?: string;
   actorRole?: string;
